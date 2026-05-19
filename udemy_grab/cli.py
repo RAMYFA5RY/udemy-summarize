@@ -8,15 +8,13 @@ import click
 
 from .auth import is_session_valid, login
 from .browser import session_browser
-from .config import INTER_PAGE_DELAY, PAGE_TIMEOUT_MS
+from .config import INTER_PAGE_DELAY
 from .curriculum import (
     SectionInfo,
     course_slug,
-    ensure_section_expanded,
     get_curriculum,
+    goto_lecture,
     is_non_video_item,
-    learn_url,
-    navigate_to_lecture,
 )
 from .renderer import LectureContent, render_section, section_file_path
 from .transcript import get_transcript_from_page
@@ -28,21 +26,18 @@ from .transcript import get_transcript_from_page
 _RECYCLE_AFTER = 40
 
 
-def _recycle_page(ctx, old_page, course_url: str, section_idx: int):
+def _recycle_page(ctx, old_page):
     """Replace the page with a fresh one to release accumulated browser memory.
 
-    The new page is returned already on the course /learn/ page with the given
-    section re-expanded, so lecture navigation can continue uninterrupted.
+    Firefox holds onto destroyed video players; closing the page hands that
+    memory back. The next goto_lecture navigates straight to a URL, so no
+    curriculum state needs restoring.
     """
     try:
         old_page.close()
     except Exception:
         pass
-    page = ctx.new_page()
-    page.goto(learn_url(course_url), timeout=PAGE_TIMEOUT_MS)
-    page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
-    ensure_section_expanded(page, section_idx)
-    return page
+    return ctx.new_page()
 
 
 _EPILOG = """\
@@ -160,49 +155,56 @@ def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) 
 
             click.echo(f"\n§{section.section_number} {section.section_title} ({len(section.lectures)} lectures)")
 
-            # Collapsed sections need expanding before their items are clickable
-            ensure_section_expanded(page, section.section_idx)
-
             contents: list[LectureContent] = []
-            for lecture_idx, lecture_title in enumerate(section.lectures):
+            for lecture in section.lectures:
                 # Quizzes / practice tests / exercises have no transcript, and
                 # loading a quiz page crashes the Playwright Firefox driver —
                 # so never navigate to them.
-                if is_non_video_item(lecture_title):
-                    click.echo(f"  [SKIP - quiz/exercise] {lecture_title}")
+                if is_non_video_item(lecture.title):
+                    click.echo(f"  [SKIP - quiz/exercise] {lecture.title}")
                     contents.append(LectureContent(
                         section_number=section.section_number,
                         section_title=section.section_title,
-                        lecture_title=lecture_title,
+                        lecture_title=lecture.title,
+                        transcript=None,
+                    ))
+                    continue
+
+                if not lecture.url:
+                    click.echo(f"  [SKIP - no url] {lecture.title}")
+                    contents.append(LectureContent(
+                        section_number=section.section_number,
+                        section_title=section.section_title,
+                        lecture_title=lecture.title,
                         transcript=None,
                     ))
                     continue
 
                 if lectures_since_recycle >= _RECYCLE_AFTER:
                     click.echo("  [recycling browser page to free memory]")
-                    page = _recycle_page(ctx, page, course_url, section.section_idx)
+                    page = _recycle_page(ctx, page)
                     lectures_since_recycle = 0
 
                 time.sleep(INTER_PAGE_DELAY)
                 try:
-                    navigate_to_lecture(page, section.section_idx, lecture_idx)
+                    goto_lecture(page, lecture.url)
                     transcript = get_transcript_from_page(page)
                     if transcript is None:
-                        click.echo(f"  [SKIP - no transcript] {lecture_title}")
+                        click.echo(f"  [SKIP - no transcript] {lecture.title}")
                     else:
-                        click.echo(f"  [OK] {lecture_title}")
+                        click.echo(f"  [OK] {lecture.title}")
                     contents.append(LectureContent(
                         section_number=section.section_number,
                         section_title=section.section_title,
-                        lecture_title=lecture_title,
+                        lecture_title=lecture.title,
                         transcript=transcript,
                     ))
                 except Exception as exc:
-                    click.echo(f"  [FAIL] {lecture_title}: {exc}")
+                    click.echo(f"  [FAIL] {lecture.title}: {exc}")
                     contents.append(LectureContent(
                         section_number=section.section_number,
                         section_title=section.section_title,
-                        lecture_title=lecture_title,
+                        lecture_title=lecture.title,
                         transcript=None,
                     ))
                 lectures_since_recycle += 1

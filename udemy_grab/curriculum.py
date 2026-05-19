@@ -16,11 +16,22 @@ _NON_VIDEO_TITLE = re.compile(
 
 
 @dataclass
+class LectureRef:
+    """One curriculum item: its display title and direct lecture URL.
+
+    url is None when no link could be resolved for the item (rare); the caller
+    skips such items rather than navigating to them.
+    """
+    title: str
+    url: str | None
+
+
+@dataclass
 class SectionInfo:
     section_idx: int       # 0-based; matches data-purpose="section-panel-{N}"
     section_number: int    # 1-based; used for file naming and display
     section_title: str
-    lectures: list[str] = field(default_factory=list)  # lecture titles in order
+    lectures: list[LectureRef] = field(default_factory=list)  # in curriculum order
 
 
 def course_slug(url: str) -> str:
@@ -92,17 +103,39 @@ def _get_section_structure(page) -> list[SectionInfo]:
         # Expand collapsed sections so lecture items are injected into the DOM
         _expand_panel(page, idx)
 
-        lecture_els = panel.query_selector_all("[data-purpose='item-title']")
-        lecture_titles = [el.inner_text().strip() for el in lecture_els]
-
         sections.append(SectionInfo(
             section_idx=idx,
             section_number=idx + 1,
             section_title=section_title,
-            lectures=lecture_titles,
+            lectures=_read_lecture_refs(panel),
         ))
 
     return sections
+
+
+def _read_lecture_refs(panel) -> list[LectureRef]:
+    """Read every curriculum item in a section panel as (title, url) pairs.
+
+    The lecture URL is resolved from the item's anchor — the element itself, a
+    descendant, or an ancestor — so navigation can page.goto() it directly
+    instead of clicking through the virtualised sidebar.
+    """
+    try:
+        items = panel.eval_on_selector_all(
+            "[data-purpose^='curriculum-item-']",
+            """els => els.map(el => {
+                const a = el.matches('a') ? el
+                        : (el.querySelector('a') || el.closest('a'));
+                const t = el.querySelector("[data-purpose='item-title']");
+                return {
+                    title: ((t ? t.textContent : el.textContent) || '').trim(),
+                    url: a ? a.href : null,
+                };
+            })""",
+        )
+    except Exception:
+        items = []
+    return [LectureRef(title=it["title"], url=it["url"]) for it in items]
 
 
 def _expand_panel(page, section_idx: int) -> None:
@@ -144,30 +177,17 @@ def _expand_panel(page, section_idx: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Navigation helpers (called by cli.py)
+# Navigation (called by cli.py)
 # ---------------------------------------------------------------------------
 
 
-def ensure_section_expanded(page, section_idx: int) -> None:
-    """Re-expand a section if the sidebar has collapsed it since initial load."""
-    _expand_panel(page, section_idx)
+def goto_lecture(page, url: str) -> str:
+    """Navigate directly to a lecture URL, bypassing the curriculum sidebar.
 
-
-def navigate_to_lecture(page, section_idx: int, lecture_idx: int) -> str:
-    """Click the lecture item in the sidebar and return the lecture URL.
-
-    Uses a JS click rather than page.click() because the transcript panel from
-    the previous lecture frequently overlaps the curriculum sidebar and
-    intercepts real pointer events. If the item is not in the DOM, the section
-    panel is re-scrolled into view and re-expanded once — the sidebar
-    virtualises long courses and drops off-screen items.
+    A direct page.goto sidesteps the sidebar's pointer-event interception and
+    list virtualisation entirely — every lecture is reachable regardless of how
+    far down the curriculum it sits.
     """
-    selector = f"[data-purpose='curriculum-item-{section_idx}-{lecture_idx}']"
-    try:
-        page.wait_for_selector(selector, timeout=10_000, state="attached")
-    except Exception:
-        _expand_panel(page, section_idx)
-        page.wait_for_selector(selector, timeout=10_000, state="attached")
-    page.eval_on_selector(selector, "el => el.click()")
+    page.goto(url, timeout=PAGE_TIMEOUT_MS)
     page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
     return page.url
