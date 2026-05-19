@@ -34,7 +34,13 @@ from .transcript import get_transcript_from_page
     default=False,
     help="Force re-authentication even if a saved session exists.",
 )
-def main(course_url: str, vault: str, reauth: bool) -> None:
+@click.option(
+    "--headful",
+    is_flag=True,
+    default=False,
+    help="Show the browser window while scraping (default: headless).",
+)
+def main(course_url: str, vault: str, reauth: bool, headful: bool) -> None:
     """Scrape Udemy course transcripts into an Obsidian vault.
 
     COURSE_URL  Full URL of the Udemy course, e.g.
@@ -42,13 +48,25 @@ def main(course_url: str, vault: str, reauth: bool) -> None:
     """
     vault_root = Path(vault).expanduser().resolve()
 
+    # ── Validate the output location up front ─────────────────────────────
+    if vault_root.exists() and not vault_root.is_dir():
+        click.echo(f"[FAIL] --vault path is not a directory: {vault_root}", err=True)
+        sys.exit(1)
+    try:
+        vault_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        click.echo(f"[FAIL] Cannot create vault directory {vault_root}: {exc}", err=True)
+        sys.exit(1)
+
     # ── Auth ──────────────────────────────────────────────────────────────
     if reauth or not is_session_valid():
         login()
 
     slug = course_slug(course_url)
+    course_dir = vault_root / "_inbox" / "Udemy" / slug
+    click.echo(f"Output  : {course_dir}")
 
-    with session_browser() as ctx:
+    with session_browser(headless=not headful) as ctx:
         # One page object reused for the entire run — avoids browser restarts
         page = ctx.new_page()
 
