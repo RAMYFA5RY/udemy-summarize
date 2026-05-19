@@ -1,0 +1,22 @@
+{
+  "python.defaultInterpreterPath": "${workspaceFolder}/.udemy_env/bin/python",
+  "python.terminal.activateEnvironment": true,
+  "files.exclude": {
+    "**/.udemy_env": true,
+    "**/__pycache__": true,
+    "**/*.egg-info": true,
+    "**/.pytest_cache": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true,
+    "**/output": true
+  },
+  "files.watcherExclude": {
+    "**/.udemy_env/**": true,
+    "**/__pycache__/**": true,
+    "**/output/**": true
+  },
+  "search.exclude": {
+    "**/.udemy_env": true,
+    "**/output": true
+  }
+}
