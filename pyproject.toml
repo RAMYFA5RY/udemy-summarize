@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "udemy-grab"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "scrapling>=0.4",
+    "camoufox[geoip]",
+    "click>=8.0",
+    "python-slugify>=8.0",
+]
+
+[project.scripts]
+udemy-grab = "udemy_grab.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["udemy_grab"]
