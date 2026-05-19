@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -110,18 +111,25 @@ def _discover_course_id(page, course_url: str) -> str:
 def _fetch_curriculum_items(page, course_id: str) -> list[dict]:
     """Fetch the full ordered curriculum (chapters + items) from Udemy's API.
 
-    page.request shares the browser context's session cookies, so the call is
-    authenticated as the logged-in user.
+    The request is issued via fetch() inside the page so it runs same-origin
+    with the real browser session (cookies, headers, user agent). Udemy
+    rejects out-of-band API calls with HTTP 403.
     """
     url = f"{_API_BASE}/courses/{course_id}/subscriber-curriculum-items/?page_size=100"
     items: list[dict] = []
     while url:
-        resp = page.request.get(url, timeout=PAGE_TIMEOUT_MS)
-        if not resp.ok:
+        result = page.evaluate(
+            """async (u) => {
+                const r = await fetch(u, { credentials: 'include' });
+                return { status: r.status, body: await r.text() };
+            }""",
+            url,
+        )
+        if result["status"] != 200:
             raise RuntimeError(
-                f"curriculum API returned HTTP {resp.status} for course {course_id}"
+                f"curriculum API returned HTTP {result['status']} for course {course_id}"
             )
-        data = resp.json()
+        data = json.loads(result["body"])
         items.extend(data.get("results", []))
         url = data.get("next")
     return items
