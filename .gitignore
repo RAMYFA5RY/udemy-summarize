@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.udemy_env/
+.venv/
+venv/
+env/
+
+# Tool / scraper output
+output/
+*.log
+
+# Local editor state (keep .vscode/settings.json — it's project config)
+.idea/
+*.swp
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Claude Code workspace data
+.claude/
