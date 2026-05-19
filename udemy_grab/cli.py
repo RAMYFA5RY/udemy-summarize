@@ -20,29 +20,59 @@ from .renderer import LectureContent, render_section, section_file_path
 from .transcript import get_transcript_from_page
 
 
-@click.command()
-@click.argument("course_url")
+_EPILOG = """\
+\b
+Examples:
+  # Scrape a course into a local folder
+  udemy-grab https://www.udemy.com/course/python-bootcamp/ --vault ./output
+  # Use the OBSIDIAN_VAULT env var instead of --vault
+  export OBSIDIAN_VAULT=~/Obsidian/MyVault
+  udemy-grab https://www.udemy.com/course/python-bootcamp/
+  # Watch the browser work (debugging)
+  udemy-grab https://www.udemy.com/course/python-bootcamp/ --vault ./output --headful
+  # Force a fresh Udemy login
+  udemy-grab https://www.udemy.com/course/python-bootcamp/ --vault ./output --reauth
+
+\b
+Notes:
+  - Output is one markdown file per section, under
+    <vault>/_inbox/Udemy/<course-slug>/
+  - Re-runs are resumable: sections whose file already exists are skipped.
+  - The first run opens a visible browser so you can complete login (2FA);
+    the session is saved and reused afterwards.
+"""
+
+
+@click.command(epilog=_EPILOG)
+@click.argument("course_url", metavar="COURSE_URL")
 @click.option(
     "--vault",
     envvar="OBSIDIAN_VAULT",
     required=True,
-    help="Obsidian vault root path (or set OBSIDIAN_VAULT env var).",
+    metavar="PATH",
+    help="Obsidian vault root path. Defaults to the OBSIDIAN_VAULT env var.",
 )
 @click.option(
     "--reauth",
     is_flag=True,
     default=False,
-    help="Force re-authentication even if a saved session exists.",
+    help="Force a fresh Udemy login even if a saved session exists.",
 )
 @click.option(
     "--headful",
     is_flag=True,
     default=False,
-    help="Show the browser window while scraping (default: headless).",
+    help="Show the browser window while scraping. Default: headless.",
 )
+@click.version_option(package_name="udemy-grab", message="%(prog)s %(version)s")
 def main(course_url: str, vault: str, reauth: bool, headful: bool) -> None:
     """Scrape Udemy course transcripts into an Obsidian vault.
 
+    Walks a course's curriculum, extracts the transcript panel for every
+    lecture, and writes one clean markdown file per section into the vault's
+    _inbox/Udemy/ folder.
+
+    \b
     COURSE_URL  Full URL of the Udemy course, e.g.
                 https://www.udemy.com/course/python-bootcamp/
     """
