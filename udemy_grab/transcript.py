@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from scrapling.parser import Adaptor
 
-from .config import FINGERPRINTS_DB
+from .config import FINGERPRINTS_DB, PAGE_TIMEOUT_MS
 
 _TRANSCRIPT_TOGGLE = "[data-purpose='transcript-toggle']"
 _TRANSCRIPT_PANEL  = "[data-purpose='transcript-panel']"
@@ -11,8 +11,30 @@ _CUE_TEXT          = "[data-purpose='transcript-panel'] [data-purpose='cue-text'
 _CUES_PER_PARAGRAPH = 6
 
 
-def get_transcript_from_page(page) -> str | None:
-    """Extract cleaned transcript from the currently loaded lecture page."""
+def get_transcript_from_page(page, retries: int = 1) -> str | None:
+    """Extract cleaned transcript from the currently loaded lecture page.
+
+    Retries on a freshly reloaded page when the first attempt comes up empty —
+    the first real video in a section sometimes has not mounted its transcript
+    toggle by the time we check. Lectures with no <video> element (quizzes,
+    articles) are never retried, since they genuinely have no transcript.
+    """
+    for attempt in range(retries + 1):
+        result = _try_extract(page)
+        if result is not None:
+            return result
+        if attempt >= retries or not page.query_selector("video"):
+            break
+        try:
+            page.reload(timeout=PAGE_TIMEOUT_MS)
+            page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+        except Exception:
+            break
+    return None
+
+
+def _try_extract(page) -> str | None:
+    """Run one transcript-extraction attempt against the current page state."""
     _ensure_transcript_visible(page)
 
     try:

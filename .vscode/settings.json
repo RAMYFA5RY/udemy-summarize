@@ -7,16 +7,13 @@
     "**/*.egg-info": true,
     "**/.pytest_cache": true,
     "**/.mypy_cache": true,
-    "**/.ruff_cache": true,
-    "**/output": true
+    "**/.ruff_cache": true
   },
   "files.watcherExclude": {
     "**/.udemy_env/**": true,
-    "**/__pycache__/**": true,
-    "**/output/**": true
+    "**/__pycache__/**": true
   },
   "search.exclude": {
-    "**/.udemy_env": true,
-    "**/output": true
+    "**/.udemy_env": true
   }
 }
