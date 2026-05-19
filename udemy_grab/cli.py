@@ -8,17 +8,41 @@ import click
 
 from .auth import is_session_valid, login
 from .browser import session_browser
-from .config import INTER_PAGE_DELAY
+from .config import INTER_PAGE_DELAY, PAGE_TIMEOUT_MS
 from .curriculum import (
     SectionInfo,
     course_slug,
     ensure_section_expanded,
     get_curriculum,
     is_non_video_item,
+    learn_url,
     navigate_to_lecture,
 )
 from .renderer import LectureContent, render_section, section_file_path
 from .transcript import get_transcript_from_page
+
+
+# Close and reopen the page every N lectures. Firefox keeps destroyed video
+# players around, so memory (and CPU/heat) climbs steadily on long courses;
+# recycling the page hands that memory back to the OS.
+_RECYCLE_AFTER = 40
+
+
+def _recycle_page(ctx, old_page, course_url: str, section_idx: int):
+    """Replace the page with a fresh one to release accumulated browser memory.
+
+    The new page is returned already on the course /learn/ page with the given
+    section re-expanded, so lecture navigation can continue uninterrupted.
+    """
+    try:
+        old_page.close()
+    except Exception:
+        pass
+    page = ctx.new_page()
+    page.goto(learn_url(course_url), timeout=PAGE_TIMEOUT_MS)
+    page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+    ensure_section_expanded(page, section_idx)
+    return page
 
 
 _EPILOG = """\
@@ -124,6 +148,7 @@ def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) 
         click.echo(f"Sections: {len(sections)}  Lectures: {total_lectures}")
 
         # ── Process each section ──────────────────────────────────────────
+        lectures_since_recycle = 0
         for section in sections:
             out_path = section_file_path(
                 vault_root, subdir, slug, section.section_number, section.section_title
@@ -153,6 +178,11 @@ def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) 
                     ))
                     continue
 
+                if lectures_since_recycle >= _RECYCLE_AFTER:
+                    click.echo("  [recycling browser page to free memory]")
+                    page = _recycle_page(ctx, page, course_url, section.section_idx)
+                    lectures_since_recycle = 0
+
                 time.sleep(INTER_PAGE_DELAY)
                 try:
                     navigate_to_lecture(page, section.section_idx, lecture_idx)
@@ -175,6 +205,7 @@ def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) 
                         lecture_title=lecture_title,
                         transcript=None,
                     ))
+                lectures_since_recycle += 1
 
             written = render_section(
                 course_title=course_title,

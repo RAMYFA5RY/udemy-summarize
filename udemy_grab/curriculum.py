@@ -41,6 +41,11 @@ def is_non_video_item(title: str) -> bool:
     return bool(_NON_VIDEO_TITLE.match(title.strip()))
 
 
+def learn_url(course_url: str) -> str:
+    """Return the /learn/ page URL for a course, derived from any course URL."""
+    return f"https://www.udemy.com/course/{course_slug(course_url)}/learn/"
+
+
 def get_curriculum(page, course_url: str) -> tuple[str, list[SectionInfo]]:
     """Navigate to the course /learn/ page and return (title, sections).
 
@@ -48,10 +53,7 @@ def get_curriculum(page, course_url: str) -> tuple[str, list[SectionInfo]]:
     then reads titles and lecture names by data-purpose attributes.
     Uses a caller-supplied page so the same browser context is reused for scraping.
     """
-    slug = course_slug(course_url)
-    learn_url = f"https://www.udemy.com/course/{slug}/learn/"
-
-    page.goto(learn_url, timeout=PAGE_TIMEOUT_MS)
+    page.goto(learn_url(course_url), timeout=PAGE_TIMEOUT_MS)
     page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
 
     title = _get_course_title(page)
