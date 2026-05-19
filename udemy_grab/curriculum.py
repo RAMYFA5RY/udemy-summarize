@@ -106,18 +106,33 @@ def _get_section_structure(page) -> list[SectionInfo]:
 
 
 def _expand_panel(page, section_idx: int) -> None:
-    """Click the section toggle if collapsed and wait for lecture items to load."""
-    panel = page.query_selector(f"[data-purpose='section-panel-{section_idx}']")
+    """Ensure a section panel is expanded and its lecture items are in the DOM.
+
+    The lecture-page sidebar virtualises its list: a panel can report
+    aria-expanded="true" while its items are absent from the DOM simply because
+    the panel is scrolled out of view. So scroll the panel into view first —
+    which forces the virtualiser to mount its items — then expand it if it is
+    still collapsed.
+    """
+    panel_sel = f"[data-purpose='section-panel-{section_idx}']"
+    panel = page.query_selector(panel_sel)
     if not panel:
         return
+
+    # Scroll the panel into view so the virtualised list mounts its items.
+    try:
+        panel.scroll_into_view_if_needed(timeout=5_000)
+    except Exception:
+        pass
+
     toggle = panel.query_selector("button.js-panel-toggler")
-    if not toggle or toggle.get_attribute("aria-expanded") == "true":
-        return
-    # JS click — transcript sidebar can overlap and intercept real pointer events
-    page.eval_on_selector(
-        f"[data-purpose='section-panel-{section_idx}'] button.js-panel-toggler",
-        "el => el.click()",
-    )
+    if toggle and toggle.get_attribute("aria-expanded") != "true":
+        # JS click — transcript sidebar can overlap and intercept real pointer events
+        page.eval_on_selector(
+            f"{panel_sel} button.js-panel-toggler",
+            "el => el.click()",
+        )
+
     try:
         page.wait_for_selector(
             f"[data-purpose^='curriculum-item-{section_idx}-']",
@@ -125,7 +140,7 @@ def _expand_panel(page, section_idx: int) -> None:
             state="attached",
         )
     except Exception:
-        pass  # empty section (e.g. practice exams with no video lectures)
+        pass  # genuinely empty section, or items still virtualised
 
 
 # ---------------------------------------------------------------------------
@@ -141,15 +156,18 @@ def ensure_section_expanded(page, section_idx: int) -> None:
 def navigate_to_lecture(page, section_idx: int, lecture_idx: int) -> str:
     """Click the lecture item in the sidebar and return the lecture URL.
 
-    Uses dispatchEvent rather than page.click() because the transcript panel
-    from the previous lecture frequently overlaps the curriculum sidebar and
-    intercepts real pointer events.
+    Uses a JS click rather than page.click() because the transcript panel from
+    the previous lecture frequently overlaps the curriculum sidebar and
+    intercepts real pointer events. If the item is not in the DOM, the section
+    panel is re-scrolled into view and re-expanded once — the sidebar
+    virtualises long courses and drops off-screen items.
     """
     selector = f"[data-purpose='curriculum-item-{section_idx}-{lecture_idx}']"
-    page.wait_for_selector(selector, timeout=10_000, state="attached")
-    page.eval_on_selector(
-        selector,
-        "el => el.click()",
-    )
+    try:
+        page.wait_for_selector(selector, timeout=10_000, state="attached")
+    except Exception:
+        _expand_panel(page, section_idx)
+        page.wait_for_selector(selector, timeout=10_000, state="attached")
+    page.eval_on_selector(selector, "el => el.click()")
     page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
     return page.url
