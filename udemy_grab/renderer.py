@@ -18,14 +18,20 @@ class LectureContent:
 
 def section_file_path(
     vault_root: Path,
+    subdir: str,
     course_slug: str,
     section_number: int,
     section_title: str,
 ) -> Path:
-    """Return the markdown file path for a section inside the vault inbox."""
+    """Return the markdown file path for a section inside the vault.
+
+    Layout is <vault_root>/<subdir>/<course_slug>/<NN-section-slug>.md.
+    A "." or empty subdir writes course folders directly into the vault root.
+    """
     section_slug = slugify(section_title)
     filename = f"{section_number:02d}-{section_slug}.md"
-    return vault_root / "_inbox" / "Udemy" / course_slug / filename
+    base = vault_root / subdir if subdir else vault_root
+    return base / course_slug / filename
 
 
 def render_section(
@@ -37,6 +43,7 @@ def render_section(
     section_title: str,
     lectures: list[LectureContent],
     vault_root: Path,
+    subdir: str,
 ) -> Path:
     """Write one section's lectures to a markdown file and return its path.
 
@@ -44,7 +51,9 @@ def render_section(
     atomically (to a temp file, then renamed) so an interrupted run can never
     leave a half-written or corrupt markdown file behind.
     """
-    out_path = section_file_path(vault_root, course_slug, section_number, section_title)
+    out_path = section_file_path(
+        vault_root, subdir, course_slug, section_number, section_title
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     course_tag = slugify(course_title, separator="-")

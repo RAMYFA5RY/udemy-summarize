@@ -53,6 +53,14 @@ Notes:
     help="Obsidian vault root path. Defaults to the OBSIDIAN_VAULT env var.",
 )
 @click.option(
+    "--subdir",
+    default="_inbox/Udemy",
+    show_default=True,
+    metavar="PATH",
+    help="Sub-path under the vault for course folders. "
+         "Use '.' to write course folders directly into the vault root.",
+)
+@click.option(
     "--reauth",
     is_flag=True,
     default=False,
@@ -65,7 +73,7 @@ Notes:
     help="Show the browser window while scraping. Default: headless.",
 )
 @click.version_option(package_name="udemy-grab", message="%(prog)s %(version)s")
-def main(course_url: str, vault: str, reauth: bool, headful: bool) -> None:
+def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) -> None:
     """Scrape Udemy course transcripts into an Obsidian vault.
 
     Walks a course's curriculum, extracts the transcript panel for every
@@ -93,7 +101,8 @@ def main(course_url: str, vault: str, reauth: bool, headful: bool) -> None:
         login()
 
     slug = course_slug(course_url)
-    course_dir = vault_root / "_inbox" / "Udemy" / slug
+    course_dir = (vault_root / subdir if subdir else vault_root) / slug
+    course_dir.mkdir(parents=True, exist_ok=True)
     click.echo(f"Output  : {course_dir}")
 
     with session_browser(headless=not headful) as ctx:
@@ -115,7 +124,9 @@ def main(course_url: str, vault: str, reauth: bool, headful: bool) -> None:
 
         # ── Process each section ──────────────────────────────────────────
         for section in sections:
-            out_path = section_file_path(vault_root, slug, section.section_number, section.section_title)
+            out_path = section_file_path(
+                vault_root, subdir, slug, section.section_number, section.section_title
+            )
 
             if out_path.exists():
                 click.echo(f"\n[SKIP] §{section.section_number} {section.section_title}")
@@ -159,6 +170,7 @@ def main(course_url: str, vault: str, reauth: bool, headful: bool) -> None:
                 section_title=section.section_title,
                 lectures=contents,
                 vault_root=vault_root,
+                subdir=subdir,
             )
             click.echo(f"  → {written}")
 
