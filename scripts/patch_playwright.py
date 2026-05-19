@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """Patch a known Playwright Firefox driver crash.
 
-Playwright's bundled Node driver reads ``pageError.location.url`` without
-guarding against a missing ``location``. When a page throws an uncaught
-JavaScript error that carries no location (Udemy quiz and some lecture pages
-do this), the read throws a ``TypeError``, the whole Node driver process dies,
-and the scrape aborts with "Connection closed while reading from the driver".
+When a page throws an uncaught JavaScript error that carries no source
+``location`` (Udemy quiz and some lecture pages do this), Playwright's bundled
+Node driver crashes and aborts the scrape with "Connection closed while
+reading from the driver". There are two failure points, and this script fixes
+both:
 
-This script rewrites those reads to optional-chaining (``location?.url``) so a
-missing location yields ``undefined`` instead of crashing.
+1. The driver reads ``pageError.location.url`` with no guard, so a missing
+   ``location`` throws a ``TypeError``.
+2. Even guarded, an ``undefined`` url/line/column fails the driver's own event
+   schema validation ("expected string, got undefined").
 
-It is idempotent: once patched, the unpatched text no longer exists, so a
-second run reports "already patched" and changes nothing.
+The fix rewrites the ``pageError`` location object to use optional chaining
+with valid-typed fallbacks (``"" `` for the url, ``0`` for line/column), so a
+missing location dispatches a harmless empty location instead of crashing.
+
+It is idempotent: a regex matches the location block in any state (original,
+half-patched, or fully patched) and rewrites it to the final form, so a second
+run reports "already patched" and changes nothing.
 
 Run it after creating or reinstalling the virtualenv, since the driver lives
 inside the (gitignored) environment and a reinstall reverts the patch:
@@ -21,16 +28,29 @@ inside the (gitignored) environment and a reinstall reverts the patch:
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
-# (unpatched, patched) — applied in order; each replacement is its own no-op
-# once done, because the unpatched substring is gone after the first pass.
-_REPLACEMENTS = [
-    ("pageError.location.url", "pageError.location?.url"),
-    ("pageError.location.lineNumber", "pageError.location?.lineNumber"),
-    ("pageError.location.columnNumber", "pageError.location?.columnNumber"),
-]
+# Matches the pageError `location` object in any state — original
+# (`pageError.location.url`), the optional-chaining-only interim patch, or the
+# final patched form — and rewrites it to the final form below.
+_LOCATION_BLOCK = re.compile(
+    r"""location:\s*\{\s*
+        url:\s*pageError\.location\??\.url(?:\s*\?\?\s*"")?,\s*
+        line:\s*pageError\.location\??\.lineNumber(?:\s*\?\?\s*0)?,\s*
+        column:\s*pageError\.location\??\.columnNumber(?:\s*\?\?\s*0)?\s*
+        \}""",
+    re.VERBOSE,
+)
+
+_PATCHED_BLOCK = (
+    "location: {\n"
+    '              url: pageError.location?.url ?? "",\n'
+    "              line: pageError.location?.lineNumber ?? 0,\n"
+    "              column: pageError.location?.columnNumber ?? 0\n"
+    "            }"
+)
 
 
 def _driver_bundle_path() -> Path:
@@ -51,19 +71,19 @@ def patch() -> int:
         return 1
 
     source = bundle.read_text(encoding="utf-8")
-    patched = source
-    total = 0
-    for unpatched, fixed in _REPLACEMENTS:
-        count = patched.count(unpatched)
-        total += count
-        patched = patched.replace(unpatched, fixed)
+    matches = _LOCATION_BLOCK.findall(source)
+    if not matches:
+        print(f"[FAIL] pageError location block not found in {bundle} — "
+              "Playwright internals may have changed.", file=sys.stderr)
+        return 1
 
+    patched = _LOCATION_BLOCK.sub(_PATCHED_BLOCK, source)
     if patched == source:
-        print(f"[OK] Already patched: {bundle}")
+        print(f"[OK] Already patched ({len(matches)} site(s)): {bundle}")
         return 0
 
     bundle.write_text(patched, encoding="utf-8")
-    print(f"[OK] Patched {total} occurrence(s) in {bundle}")
+    print(f"[OK] Patched {len(matches)} site(s) in {bundle}")
     return 0
 
 
