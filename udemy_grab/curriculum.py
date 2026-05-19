@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 from .config import PAGE_TIMEOUT_MS
+
+# Udemy auto-numbers these curriculum item types with a fixed "<Type> N:" prefix.
+# None of them carry a transcript, and the quiz app in particular triggers a
+# Firefox driver crash on load, so we skip navigating to them entirely.
+_NON_VIDEO_TITLE = re.compile(
+    r"^(Quiz|Practice Test|Assignment|Coding Exercise)\s+\d+\s*:",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -20,6 +29,16 @@ def course_slug(url: str) -> str:
         return parts[parts.index("course") + 1]
     except (ValueError, IndexError):
         return parts[-1] if parts else "unknown-course"
+
+
+def is_non_video_item(title: str) -> bool:
+    """True for curriculum items that never have a transcript (quizzes etc.).
+
+    Detected purely from Udemy's auto-assigned "<Type> N:" title prefix, so no
+    navigation is needed — important because loading a quiz page crashes the
+    Playwright Firefox driver outright.
+    """
+    return bool(_NON_VIDEO_TITLE.match(title.strip()))
 
 
 def get_curriculum(page, course_url: str) -> tuple[str, list[SectionInfo]]:

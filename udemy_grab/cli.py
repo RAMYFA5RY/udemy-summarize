@@ -14,6 +14,7 @@ from .curriculum import (
     course_slug,
     ensure_section_expanded,
     get_curriculum,
+    is_non_video_item,
     navigate_to_lecture,
 )
 from .renderer import LectureContent, render_section, section_file_path
@@ -139,6 +140,19 @@ def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) 
 
             contents: list[LectureContent] = []
             for lecture_idx, lecture_title in enumerate(section.lectures):
+                # Quizzes / practice tests / exercises have no transcript, and
+                # loading a quiz page crashes the Playwright Firefox driver —
+                # so never navigate to them.
+                if is_non_video_item(lecture_title):
+                    click.echo(f"  [SKIP - quiz/exercise] {lecture_title}")
+                    contents.append(LectureContent(
+                        section_number=section.section_number,
+                        section_title=section.section_title,
+                        lecture_title=lecture_title,
+                        transcript=None,
+                    ))
+                    continue
+
                 time.sleep(INTER_PAGE_DELAY)
                 try:
                     navigate_to_lecture(page, section.section_idx, lecture_idx)
