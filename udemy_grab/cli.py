@@ -9,13 +9,7 @@ import click
 from .auth import is_session_valid, login
 from .browser import session_browser
 from .config import INTER_PAGE_DELAY
-from .curriculum import (
-    SectionInfo,
-    course_slug,
-    get_curriculum,
-    goto_lecture,
-    is_non_video_item,
-)
+from .curriculum import SKIP_KINDS, course_slug, get_curriculum, goto_lecture
 from .renderer import LectureContent, render_section, section_file_path
 from .transcript import get_transcript_from_page
 
@@ -157,11 +151,9 @@ def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) 
 
             contents: list[LectureContent] = []
             for lecture in section.lectures:
-                # Quizzes / practice tests / exercises have no transcript, and
-                # loading a quiz page crashes the Playwright Firefox driver —
-                # so never navigate to them.
-                if is_non_video_item(lecture.title):
-                    click.echo(f"  [SKIP - quiz/exercise] {lecture.title}")
+                # Quizzes and practice tests have no transcript — skip them.
+                if lecture.kind in SKIP_KINDS:
+                    click.echo(f"  [SKIP - {lecture.kind}] {lecture.title}")
                     contents.append(LectureContent(
                         section_number=section.section_number,
                         section_title=section.section_title,

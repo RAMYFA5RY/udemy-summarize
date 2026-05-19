@@ -6,29 +6,31 @@ from urllib.parse import urlparse
 
 from .config import PAGE_TIMEOUT_MS
 
-# Udemy auto-numbers these curriculum item types with a fixed "<Type> N:" prefix.
-# None of them carry a transcript, and the quiz app in particular triggers a
-# Firefox driver crash on load, so we skip navigating to them entirely.
-_NON_VIDEO_TITLE = re.compile(
-    r"^(Quiz|Practice Test|Assignment|Coding Exercise)\s+\d+\s*:",
-    re.IGNORECASE,
-)
+_API_BASE = "https://www.udemy.com/api-2.0"
+_CHAPTER_CLASS = "chapter"
+# Curriculum item _class -> URL path segment for that item's page.
+_ITEM_PATH = {"lecture": "lecture", "quiz": "quiz", "practice": "practice"}
+# Item kinds that never carry a transcript — the caller skips navigating to them.
+SKIP_KINDS = frozenset({"quiz", "practice"})
+# Course id as it appears in the api-2.0 traffic the /learn/ page fires.
+_COURSE_ID_RE = re.compile(r"/api-2\.0/.*?courses/(\d+)")
 
 
 @dataclass
 class LectureRef:
-    """One curriculum item: its display title and direct lecture URL.
+    """One curriculum item: display title, direct lecture URL, and Udemy _class.
 
-    url is None when no link could be resolved for the item (rare); the caller
-    skips such items rather than navigating to them.
+    url is None only when the API returned no id for the item (rare); the
+    caller skips such items rather than navigating to them.
     """
     title: str
     url: str | None
+    kind: str
 
 
 @dataclass
 class SectionInfo:
-    section_idx: int       # 0-based; matches data-purpose="section-panel-{N}"
+    section_idx: int       # 0-based list position
     section_number: int    # 1-based; used for file naming and display
     section_title: str
     lectures: list[LectureRef] = field(default_factory=list)  # in curriculum order
@@ -42,143 +44,25 @@ def course_slug(url: str) -> str:
         return parts[-1] if parts else "unknown-course"
 
 
-def is_non_video_item(title: str) -> bool:
-    """True for curriculum items that never have a transcript (quizzes etc.).
-
-    Detected purely from Udemy's auto-assigned "<Type> N:" title prefix, so no
-    navigation is needed — important because loading a quiz page crashes the
-    Playwright Firefox driver outright.
-    """
-    return bool(_NON_VIDEO_TITLE.match(title.strip()))
-
-
 def learn_url(course_url: str) -> str:
     """Return the /learn/ page URL for a course, derived from any course URL."""
     return f"https://www.udemy.com/course/{course_slug(course_url)}/learn/"
 
 
 def get_curriculum(page, course_url: str) -> tuple[str, list[SectionInfo]]:
-    """Navigate to the course /learn/ page and return (title, sections).
+    """Return (course_title, sections) for a course.
 
-    Expands every section to force Udemy to render its lecture list into the DOM,
-    then reads titles and lecture names by data-purpose attributes.
-    Uses a caller-supplied page so the same browser context is reused for scraping.
+    Udemy's curriculum sidebar is plain JavaScript-routed <div>s with no
+    lecture links, so the structure is read from Udemy's curriculum API
+    instead. The numeric course id is sniffed from the API traffic the
+    /learn/ page fires, then the full ordered curriculum is fetched in one
+    pass and grouped into sections.
     """
-    page.goto(learn_url(course_url), timeout=PAGE_TIMEOUT_MS)
-    page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
-
+    slug = course_slug(course_url)
+    course_id = _discover_course_id(page, course_url)
     title = _get_course_title(page)
-    sections = _get_section_structure(page)
-    return title, sections
-
-
-# ---------------------------------------------------------------------------
-# Curriculum parsing
-# ---------------------------------------------------------------------------
-
-
-def _get_course_title(page) -> str:
-    try:
-        el = page.query_selector("h1 a")
-        if el:
-            return el.inner_text().strip()
-        el = page.query_selector("h1")
-        if el:
-            return el.inner_text().strip()
-    except Exception:
-        pass
-    return "Unknown Course"
-
-
-def _get_section_structure(page) -> list[SectionInfo]:
-    # All section panels are in the DOM even before expanding;
-    # their *lecture items* are lazy-rendered on first expand.
-    panels = page.query_selector_all("[data-purpose^='section-panel-']")
-    sections: list[SectionInfo] = []
-
-    for idx, panel in enumerate(panels):
-        title_el = panel.query_selector(".ud-accordion-panel-title span")
-        section_title = title_el.inner_text().strip() if title_el else f"Section {idx + 1}"
-
-        # Expand collapsed sections so lecture items are injected into the DOM
-        _expand_panel(page, idx)
-
-        sections.append(SectionInfo(
-            section_idx=idx,
-            section_number=idx + 1,
-            section_title=section_title,
-            lectures=_read_lecture_refs(panel),
-        ))
-
-    return sections
-
-
-def _read_lecture_refs(panel) -> list[LectureRef]:
-    """Read every curriculum item in a section panel as (title, url) pairs.
-
-    The lecture URL is resolved from the item's anchor — the element itself, a
-    descendant, or an ancestor — so navigation can page.goto() it directly
-    instead of clicking through the virtualised sidebar.
-    """
-    try:
-        items = panel.eval_on_selector_all(
-            "[data-purpose^='curriculum-item-']",
-            """els => els.map(el => {
-                const a = el.matches('a') ? el
-                        : (el.querySelector('a') || el.closest('a'));
-                const t = el.querySelector("[data-purpose='item-title']");
-                return {
-                    title: ((t ? t.textContent : el.textContent) || '').trim(),
-                    url: a ? a.href : null,
-                };
-            })""",
-        )
-    except Exception:
-        items = []
-    return [LectureRef(title=it["title"], url=it["url"]) for it in items]
-
-
-def _expand_panel(page, section_idx: int) -> None:
-    """Ensure a section panel is expanded and its lecture items are in the DOM.
-
-    The lecture-page sidebar virtualises its list: a panel can report
-    aria-expanded="true" while its items are absent from the DOM simply because
-    the panel is scrolled out of view. So scroll the panel into view first —
-    which forces the virtualiser to mount its items — then expand it if it is
-    still collapsed.
-    """
-    panel_sel = f"[data-purpose='section-panel-{section_idx}']"
-    panel = page.query_selector(panel_sel)
-    if not panel:
-        return
-
-    # Scroll the panel into view so the virtualised list mounts its items.
-    try:
-        panel.scroll_into_view_if_needed(timeout=5_000)
-    except Exception:
-        pass
-
-    toggle = panel.query_selector("button.js-panel-toggler")
-    if toggle and toggle.get_attribute("aria-expanded") != "true":
-        # JS click — transcript sidebar can overlap and intercept real pointer events
-        page.eval_on_selector(
-            f"{panel_sel} button.js-panel-toggler",
-            "el => el.click()",
-        )
-
-    try:
-        page.wait_for_selector(
-            f"[data-purpose^='curriculum-item-{section_idx}-']",
-            timeout=10_000,
-            state="attached",
-        )
-    except Exception:
-        pass  # genuinely empty section, or items still virtualised
-
-
-# ---------------------------------------------------------------------------
-# Navigation (called by cli.py)
-# ---------------------------------------------------------------------------
+    items = _fetch_curriculum_items(page, course_id)
+    return title, _build_sections(slug, items)
 
 
 def goto_lecture(page, url: str) -> str:
@@ -191,3 +75,93 @@ def goto_lecture(page, url: str) -> str:
     page.goto(url, timeout=PAGE_TIMEOUT_MS)
     page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
     return page.url
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _discover_course_id(page, course_url: str) -> str:
+    """Load the /learn/ page and sniff the numeric course id from its API calls."""
+    seen: list[str] = []
+
+    def _on_request(request) -> None:
+        match = _COURSE_ID_RE.search(request.url)
+        if match:
+            seen.append(match.group(1))
+
+    page.on("request", _on_request)
+    try:
+        page.goto(learn_url(course_url), timeout=PAGE_TIMEOUT_MS)
+        try:
+            page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+        except Exception:
+            pass  # the SPA may poll forever; the id is captured long before idle
+    finally:
+        page.remove_listener("request", _on_request)
+
+    if not seen:
+        raise RuntimeError("could not determine the Udemy course id from page traffic")
+    # The course's own id dominates the learn page's API traffic.
+    return max(set(seen), key=seen.count)
+
+
+def _fetch_curriculum_items(page, course_id: str) -> list[dict]:
+    """Fetch the full ordered curriculum (chapters + items) from Udemy's API.
+
+    page.request shares the browser context's session cookies, so the call is
+    authenticated as the logged-in user.
+    """
+    url = f"{_API_BASE}/courses/{course_id}/subscriber-curriculum-items/?page_size=100"
+    items: list[dict] = []
+    while url:
+        resp = page.request.get(url, timeout=PAGE_TIMEOUT_MS)
+        if not resp.ok:
+            raise RuntimeError(
+                f"curriculum API returned HTTP {resp.status} for course {course_id}"
+            )
+        data = resp.json()
+        items.extend(data.get("results", []))
+        url = data.get("next")
+    return items
+
+
+def _build_sections(slug: str, items: list[dict]) -> list[SectionInfo]:
+    """Group the flat curriculum item list into sections by chapter markers."""
+    sections: list[SectionInfo] = []
+    for item in items:
+        kind = item.get("_class", "")
+        title = (item.get("title") or "").strip()
+
+        if kind == _CHAPTER_CLASS:
+            number = len(sections) + 1
+            sections.append(SectionInfo(
+                section_idx=len(sections),
+                section_number=number,
+                section_title=f"Section {number}: {title}" if title else f"Section {number}",
+            ))
+            continue
+
+        if not sections:  # items before the first chapter — hold them in one
+            sections.append(SectionInfo(0, 1, "Section 1"))
+
+        item_id = item.get("id")
+        segment = _ITEM_PATH.get(kind, "lecture")
+        url = (
+            f"https://www.udemy.com/course/{slug}/learn/{segment}/{item_id}"
+            if item_id else None
+        )
+        sections[-1].lectures.append(LectureRef(title=title, url=url, kind=kind))
+
+    return sections
+
+
+def _get_course_title(page) -> str:
+    try:
+        el = page.query_selector("h1 a") or page.query_selector("h1")
+        if el:
+            return el.inner_text().strip()
+    except Exception:
+        pass
+    return "Unknown Course"
