@@ -1,4 +1,4 @@
-# udemy-summarize
+# udemy-summarize-tool
 
 Turn Udemy courses into clean, readable Markdown notes.
 
