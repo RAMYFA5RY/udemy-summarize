@@ -22,7 +22,7 @@ env/
 output/
 *.log
 
-# Local editor state (keep .vscode/settings.json — it's project config)
+# Local editor state
 .idea/
 *.swp
 
@@ -32,3 +32,5 @@ Thumbs.db
 
 # Claude Code workspace data
 .claude/
+.envrc
+.vscode/settings.json
