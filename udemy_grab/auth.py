@@ -11,7 +11,28 @@ from .config import (
 
 
 def is_session_valid() -> bool:
-    return SESSION_FILE.exists()
+    """Return True only if the saved session file exists and contains a non-expired Udemy auth cookie."""
+    if not SESSION_FILE.exists():
+        return False
+    try:
+        import json, time
+        data = json.loads(SESSION_FILE.read_text())
+        cookies = data.get("cookies", [])
+        auth_cookies = [
+            c for c in cookies
+            if "udemy" in c.get("domain", "") and c.get("name", "") in ("access_token", "client_id", "ud_cache_user")
+        ]
+        if not auth_cookies:
+            return False
+        now = time.time()
+        # If any auth cookie carries an expiry, treat it as expired when past it.
+        for c in auth_cookies:
+            exp = c.get("expires", -1)
+            if exp != -1 and exp < now:
+                return False
+        return True
+    except Exception:
+        return SESSION_FILE.exists()
 
 
 def login() -> None:

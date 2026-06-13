@@ -15,6 +15,13 @@ _ITEM_PATH = {"lecture": "lecture", "quiz": "quiz", "practice": "practice"}
 SKIP_KINDS = frozenset({"quiz", "practice"})
 # Course id as it appears in the api-2.0 traffic the /learn/ page fires.
 _COURSE_ID_RE = re.compile(r"/api-2\.0/.*?courses/(\d+)")
+# Fallback: course id patterns embedded in page HTML.
+_HTML_COURSE_ID_RES = [
+    re.compile(r'"courseId"\s*:\s*(\d+)'),
+    re.compile(r'"id"\s*:\s*(\d+)\s*,\s*"_class"\s*:\s*"course"'),
+    re.compile(r'data-course-id=["\'](\d+)["\']'),
+    re.compile(r'/courses/(\d+)/subscriber-curriculum-items'),
+]
 
 
 @dataclass
@@ -50,7 +57,7 @@ def learn_url(course_url: str) -> str:
     return f"https://www.udemy.com/course/{course_slug(course_url)}/learn/"
 
 
-def get_curriculum(page, course_url: str) -> tuple[str, list[SectionInfo]]:
+def get_curriculum(page, course_url: str, debug: bool = False) -> tuple[str, list[SectionInfo]]:
     """Return (course_title, sections) for a course.
 
     Udemy's curriculum sidebar is plain JavaScript-routed <div>s with no
@@ -60,7 +67,7 @@ def get_curriculum(page, course_url: str) -> tuple[str, list[SectionInfo]]:
     pass and grouped into sections.
     """
     slug = course_slug(course_url)
-    course_id = _discover_course_id(page, course_url)
+    course_id = _discover_course_id(page, course_url, debug=debug)
     title = _get_course_title(page)
     items = _fetch_curriculum_items(page, course_id)
     return title, _build_sections(slug, items)
@@ -83,12 +90,20 @@ def goto_lecture(page, url: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _discover_course_id(page, course_url: str) -> str:
-    """Load the /learn/ page and sniff the numeric course id from its API calls."""
+def _discover_course_id(page, course_url: str, debug: bool = False) -> str:
+    """Load the /learn/ page and sniff the numeric course id from its API calls.
+
+    Falls back to scraping the course ID from the page HTML, then from the
+    course landing page, so the tool works even if the user is not yet enrolled.
+    """
     seen: list[str] = []
+    all_api_urls: list[str] = []
 
     def _on_request(request) -> None:
-        match = _COURSE_ID_RE.search(request.url)
+        url = request.url
+        if "api" in url or "udemy" in url:
+            all_api_urls.append(url)
+        match = _COURSE_ID_RE.search(url)
         if match:
             seen.append(match.group(1))
 
@@ -102,10 +117,48 @@ def _discover_course_id(page, course_url: str) -> str:
     finally:
         page.remove_listener("request", _on_request)
 
-    if not seen:
-        raise RuntimeError("could not determine the Udemy course id from page traffic")
-    # The course's own id dominates the learn page's API traffic.
-    return max(set(seen), key=seen.count)
+    # Detect session expiry: Udemy redirected to the login page.
+    if any("/join/login-popup" in u or "/join/passwordless-auth" in u for u in all_api_urls):
+        raise RuntimeError(
+            "Udemy session has expired — re-run with --reauth to log in again"
+        )
+
+    if debug and not seen:
+        import sys
+        print("\n[DEBUG] No course ID found in request traffic. Captured URLs:", file=sys.stderr)
+        for u in all_api_urls[:40]:
+            print(f"  {u}", file=sys.stderr)
+
+    if seen:
+        return max(set(seen), key=seen.count)
+
+    # API traffic approach failed (e.g. not enrolled, redirected to landing page).
+    # Try extracting the course id from the current page's HTML.
+    course_id = _extract_id_from_html(page.content())
+    if course_id:
+        return course_id
+
+    # Last resort: navigate to the public course landing page and scrape there.
+    slug = course_slug(course_url)
+    page.goto(f"https://www.udemy.com/course/{slug}/", timeout=PAGE_TIMEOUT_MS)
+    try:
+        page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+    except Exception:
+        pass
+    course_id = _extract_id_from_html(page.content())
+    if course_id:
+        return course_id
+
+    raise RuntimeError("could not determine the Udemy course id from page traffic")
+
+
+def _extract_id_from_html(html: str) -> str | None:
+    """Try each known HTML pattern for the numeric course id."""
+    for pattern in _HTML_COURSE_ID_RES:
+        m = pattern.search(html)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _fetch_curriculum_items(page, course_id: str) -> list[dict]:

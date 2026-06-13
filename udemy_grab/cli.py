@@ -86,8 +86,14 @@ Notes:
     default=False,
     help="Show the browser window while scraping. Default: headless.",
 )
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Print captured API request URLs when course ID detection fails.",
+)
 @click.version_option(package_name="udemy-grab", message="%(prog)s %(version)s")
-def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) -> None:
+def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool, debug: bool) -> None:
     """Scrape Udemy course transcripts into an Obsidian vault.
 
     Walks a course's curriculum, extracts the transcript panel for every
@@ -126,7 +132,7 @@ def main(course_url: str, vault: str, subdir: str, reauth: bool, headful: bool) 
         # ── Curriculum ────────────────────────────────────────────────────
         click.echo(f"\nFetching curriculum: {course_url}")
         try:
-            course_title, sections = get_curriculum(page, course_url)
+            course_title, sections = get_curriculum(page, course_url, debug=debug)
         except Exception as exc:
             click.echo(f"[FAIL] Could not scrape curriculum: {exc}", err=True)
             sys.exit(1)
